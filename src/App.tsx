@@ -54,7 +54,10 @@ const App: React.FC = () => {
         <Settings
           project={selectedProject}
           onBack={() => setCurrentScreen("DASHBOARD")}
-          onSave={handleUpdateProject}
+          onSave={(updated) => {
+              handleUpdateProject(updated);
+              setCurrentScreen("REHEARSAL");
+          }}
         />
       )}
 

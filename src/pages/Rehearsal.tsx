@@ -14,8 +14,11 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
   const [pitch, setPitch] = useState(0);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [filterMode, setFilterMode] = useState<"ALL" | "MY_PART">("MY_PART");
-  const [selectedRole, setSelectedRole] = useState<Part>(Part.Alto);
+  const [selectedRole, setSelectedRole] = useState<string>("All");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+
+  // Determine roles available in this song
+  const availableRoles = Array.from(new Set(project.lyrics.flatMap(l => l.parts))).sort();
   const [isLoaded, setIsLoaded] = useState(false);
 
   const playerRef = useRef<Tone.Player | null>(null);
@@ -148,6 +151,21 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
   }, [activeLineIndex]);
 
   const getPartColor = (part: Part) => {
+     // Use dynamic colors from project members if available
+     if (project.members) {
+         const member = project.members.find(m => m.name === part);
+         if (member) {
+             // Tailwind arbitrary values are tricky dynamically.
+             // We can use style attribute for exact colors, but existing logic splits classes.
+             // "text-purple-500 bg-purple-500/20 bg-purple-500" -> [text, bg-opacity, bg-bar]
+             // We need to return a string format that our component parses.
+             // But our component expects Tailwind classes currently.
+             // Let's refactor the component to use style={{}} for colors instead of class names where possible.
+             // Or return a special marker to indicate custom color.
+             return `custom|${member.color}`;
+         }
+     }
+
      if (part === Part.Tenor) return "text-purple-500 bg-purple-500/20 bg-purple-500";
      if (part === Part.Soprano1) return "text-emerald-500 bg-emerald-500/20 bg-emerald-500";
      if (part === Part.Alto) return "text-primary bg-primary/20 bg-primary"; 
@@ -180,13 +198,6 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
               settings
             </span>
           </button>
-          <div
-            className="bg-center bg-no-repeat bg-cover rounded-full size-10 border-2 border-white dark:border-[#283039]"
-            style={{
-              backgroundImage:
-                'url("https://lh3.googleusercontent.com/aida-public/AB6AXuDsREbKF5RhNz4w_mrkwGNVJ-GsAYUt_B5Mu5ZyTrdTvqqdRPf-7hfhb0_C7BIPDojNXDgyjk_FJUQeOvZ7GKcOV1fK1TlUHAuX7HNmoqpwk3G3ShETJVO4JzbfILyVYCr3VHkWWCY1eB3USDpMmDrFyWG4QZrlqe4CwFrr6PnOACKgNGXJSNrpcLnLz0i1tJfUKCGE85Wf_-BTUmnUBphkUK8dz0hD5X-LARWw2SwgvphUisK9bA2Hap1d0QEQsKIVD3TUmRU44rX0")',
-            }}
-          ></div>
         </div>
       </header>
 
@@ -203,8 +214,6 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                 <span className="bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider">
                   Rehearsal
                 </span>
-                <span>•</span>
-                <span>Arrangement by {project.composer}</span>
               </div>
             </div>
           </div>
@@ -251,7 +260,17 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
               <div className="flex flex-wrap items-center justify-between gap-4">
                 {/* Playback Buttons */}
                 <div className="flex items-center gap-2">
-                  <button className="p-2 rounded-full text-slate-500 hover:text-primary hover:bg-primary/10 dark:text-[#9dabb9] dark:hover:text-primary transition-all">
+                  <button 
+                    onClick={() => {
+                      setCurrentSeconds(0);
+                      pausedAtRef.current = 0;
+                      startTimeRef.current = Tone.now();
+                      if (isPlaying && playerRef.current) {
+                        playerRef.current.stop();
+                        playerRef.current.start(undefined, 0);
+                      }
+                    }}
+                    className="p-2 rounded-full text-slate-500 hover:text-primary hover:bg-primary/10 dark:text-[#9dabb9] dark:hover:text-primary transition-all">
                     <span className="material-symbols-outlined text-[28px]">
                       skip_previous
                     </span>
@@ -268,14 +287,22 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                         <span className="material-symbols-outlined animate-spin">progress_activity</span>
                     )}
                   </button>
-                  <button className="p-2 rounded-full text-slate-500 hover:text-primary hover:bg-primary/10 dark:text-[#9dabb9] dark:hover:text-primary transition-all">
+                  <button 
+                    onClick={() => {
+                        // Skip forward 5s (optional, or just disable)
+                        // For now keep it as "Skip Next" visual but maybe no-op or just +5s
+                        const newTime = Math.min(currentSeconds + 5, durationSec);
+                        setCurrentSeconds(newTime);
+                        pausedAtRef.current = newTime;
+                        startTimeRef.current = Tone.now() - newTime;
+                        if (isPlaying && playerRef.current) {
+                            playerRef.current.stop();
+                            playerRef.current.start(undefined, newTime);
+                        }
+                    }}
+                    className="p-2 rounded-full text-slate-500 hover:text-primary hover:bg-primary/10 dark:text-[#9dabb9] dark:hover:text-primary transition-all">
                     <span className="material-symbols-outlined text-[28px]">
                       skip_next
-                    </span>
-                  </button>
-                  <button className="ml-2 p-2 rounded-lg text-primary bg-primary/10 dark:text-primary dark:bg-primary/20">
-                    <span className="material-symbols-outlined text-[24px]">
-                      repeat
                     </span>
                   </button>
                 </div>
@@ -321,13 +348,19 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
               </div>
               {/* Member Selection */}
               <div className="relative group">
-                <button className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-[#283039] hover:bg-slate-200 dark:hover:bg-[#3b4754] rounded-lg text-sm font-medium transition-colors">
-                  <span className="text-slate-500 dark:text-[#9dabb9]">Role:</span>
-                  <span className="text-slate-900 dark:text-white font-bold">{selectedRole}</span>
-                  <span className="material-symbols-outlined text-[20px] text-slate-500">
+                <select 
+                    value={selectedRole}
+                    onChange={(e) => setSelectedRole(e.target.value)}
+                    className="appearance-none flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-[#283039] hover:bg-slate-200 dark:hover:bg-[#3b4754] rounded-lg text-sm font-medium transition-colors text-slate-900 dark:text-white font-bold cursor-pointer pr-8 outline-none focus:ring-2 focus:ring-primary/50"
+                >
+                    <option value="All">All Roles</option>
+                    {availableRoles.map(role => (
+                        <option key={role} value={role}>{role}</option>
+                    ))}
+                </select>
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 material-symbols-outlined text-[20px] text-slate-500 pointer-events-none">
                     expand_more
-                  </span>
-                </button>
+                </span>
               </div>
             </div>
           </div>
@@ -341,13 +374,30 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                  const isActive = idx === activeLineIndex;
                  const isPast = idx < activeLineIndex;
                  // Filtering logic
-                 const isMyPart = filterMode === "MY_PART" ? line.parts.includes(selectedRole) || line.parts.includes(Part.Tutti) : true;
+                 const isMyPart = filterMode === "MY_PART" ? (
+                     selectedRole === "All" ? true : (line.parts.includes(selectedRole as Part) || line.parts.includes(Part.Tutti))
+                 ) : true;
+                 // If filtered out, we can hide or dim. Let's dim heavily.
+                 const isHidden = !isMyPart;
+
+                 if (isHidden) return null; // Or return simplified view
                  
                  const primaryPart = line.parts[0] || Part.Tutti;
-                 const colorClasses = getPartColor(primaryPart).split(' '); // [text, bg-opacity, bg-bar]
-                 const textColor = colorClasses[0];
-                 const badgeBg = colorClasses[1];
-                 const barBg = colorClasses[2];
+                 
+                 // Handle Color Logic
+                 const colorData = getPartColor(primaryPart);
+                 let textColorClass = "", badgeBgClass = "", barBgClass = "";
+                 let customColor = null;
+
+                 if (colorData.startsWith("custom|")) {
+                     customColor = colorData.split("|")[1];
+                 } else {
+                     const parts = colorData.split(' ');
+                     textColorClass = parts[0];
+                     badgeBgClass = parts[1];
+                     barBgClass = parts[2];
+                 }
+
                  const avatar = getAvatar(primaryPart);
 
                  // Dynamic Styles based on Active State
@@ -377,14 +427,23 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                         }}
                         className={`flex items-stretch gap-4 p-4 md:p-5 rounded-xl transition-all cursor-pointer ${containerClass}`}
                     >
-                        <div className={`w-1.5 rounded-full self-stretch ${isActive ? 'bg-primary shadow-[0_0_10px_rgba(19,127,236,0.6)]' : barBg}`}></div>
+                        <div 
+                            className={`w-1.5 rounded-full self-stretch ${isActive ? 'shadow-[0_0_10px_rgba(19,127,236,0.6)]' : ''} ${!customColor ? barBgClass : ''}`}
+                            style={isActive ? { backgroundColor: '#137FEC' } : (customColor ? { backgroundColor: customColor } : {})}
+                        ></div>
                         <div className="flex flex-col gap-1 w-full">
                             <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                    <div className={`size-6 rounded-full flex items-center justify-center text-xs font-bold ${isActive ? 'bg-primary text-white' : `${badgeBg} ${textColor}`}`}>
+                                    <div 
+                                        className={`size-6 rounded-full flex items-center justify-center text-xs font-bold ${isActive ? 'bg-primary text-white' : ''} ${!customColor && !isActive ? `${badgeBgClass} ${textColorClass}` : ''}`}
+                                        style={!isActive && customColor ? { backgroundColor: `${customColor}33`, color: customColor } : {}}
+                                    >
                                         {avatar}
                                     </div>
-                                    <span className={`text-xs uppercase tracking-wide ${isActive ? 'font-bold text-primary' : 'font-semibold text-slate-500 dark:text-[#9dabb9]'}`}>
+                                    <span 
+                                        className={`text-xs uppercase tracking-wide ${isActive ? 'font-bold text-primary' : 'font-semibold'}`}
+                                        style={!isActive && customColor ? { color: customColor } : {}}
+                                    >
                                         {primaryPart === Part.Alto && isActive ? "Alto (You)" : primaryPart}
                                     </span>
                                 </div>

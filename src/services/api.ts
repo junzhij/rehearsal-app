@@ -89,25 +89,19 @@ export const api = {
         
         let parts: Part[] = [];
         if (member) {
-             // Try to match member name to Part, or fallback to Tutti
-             if (Object.values(Part).includes(member.name as Part)) {
-                 parts = [member.name as Part];
-             } else {
-                 // For custom member names, we can't map to Part enum easily in strict TS without casting.
-                 // But the UI just displays string in some places.
-                 // However, type is Part[].
-                 // Let's assume for MVP we only use standard parts in names if possible,
-                 // or we fallback to Tutti for coloring but maybe show name?
-                 // Actually, if we use custom members, we should probably update Part enum or just use string.
-                 // For now, defaulting to Tutti if not found in enum.
-                 parts = [Part.Tutti]; 
-             }
+            // Use member name directly. Since Part is an enum string, we can cast or just use string[] if types allowed.
+            // But types.ts defines parts as Part[].
+            // For MVP, we treat custom member names as valid "Parts" by casting.
+            parts = [member.name as Part];
         } else {
             // If no member assigned, empty or Tutti?
             // DB says member_id is nullable.
             parts = []; 
         }
         
+        // Inject color info? Ideally LyricLine shouldn't carry color, but we can look it up in UI.
+        // But the UI currently hardcodes colors in getPartColor.
+        // We should probably expose members in Project to let UI lookup colors.
         return { ...l, parts };
     });
 
@@ -119,7 +113,8 @@ export const api = {
       duration: formatDuration(projectData.audio_files?.[0]?.duration || 0),
       updatedAt: new Date(projectData.updated_at).toLocaleDateString(),
       coverImage: 'https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae?q=80&w=2070&auto=format&fit=crop',
-      lyrics: lyricsWithParts
+      lyrics: lyricsWithParts,
+      members: membersData || [] // Expose members to frontend
     };
   },
 

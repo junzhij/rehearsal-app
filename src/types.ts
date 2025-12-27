@@ -42,7 +42,7 @@ export enum Part {
   Alto = "Alto",
   Tenor = "Tenor",
   Bass = "Bass",
-  Tutti = "Tutti (All)",
+  Tutti = "NG",
 }
 
 export interface LyricLine {
@@ -62,6 +62,7 @@ export interface Project {
   updatedAt: string;
   coverImage: string;
   lyrics: LyricLine[];
+  members?: DbMember[];
 }
 
 export type ViewState = 'DASHBOARD' | 'SETTINGS' | 'REHEARSAL';

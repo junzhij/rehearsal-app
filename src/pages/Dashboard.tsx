@@ -12,6 +12,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     loadProjects();
@@ -48,6 +49,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         setCreating(false);
     }
   };
+
+  const filteredProjects = projects.filter(project => 
+      project.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      project.composer.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <>
@@ -109,7 +115,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           {/* ... (Menu items kept same) ... */}
           <div className="hidden md:flex items-center gap-6">
             <a className="text-sm font-medium text-slate-900 dark:text-white hover:text-primary transition-colors" href="#">Dashboard</a>
-            <a className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors" href="#">Community</a>
           </div>
         </div>
         {/* ... (Search and Profile kept same) ... */}
@@ -122,18 +127,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 </span>
               </div>
               <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full flex-1 border-none bg-transparent px-3 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-0"
                 placeholder="Search projects..."
               />
             </div>
           </label>
-          <div
-            className="h-10 w-10 cursor-pointer rounded-full bg-slate-200 dark:bg-slate-700 bg-cover bg-center ring-2 ring-transparent hover:ring-primary transition-all"
-            style={{
-              backgroundImage:
-                'url("https://lh3.googleusercontent.com/aida-public/AB6AXuDk5Snt155qPB65MPRV7Ip2WAAmFbEKm46FxHEL0CzHTu82V2aIRvCmnkb58JrJaJqAuwrsAI8mJ1OEEX9HqeaSm3iYh_Om4bqEWfkOxxv7hivJDk0SjsIZc9eqIIeV6dBqvwlk3G1wIOAJnSJ3P6UozNuOu_wfHIl77HVDU5gvnvBp62xGeZkXC-XnWERx_fL7UVaHXsdEhBdOblf2RlEeoCET5DrT7UNqCAXhKrw8XKdRqVcBVWf4BX2B_3rvcsSwqZGIUNaTEUGK")',
-            }}
-          ></div>
         </div>
       </header>
 
@@ -166,15 +166,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             {/* Toolbar / Filters */}
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex gap-2">
-                 <button className="group flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1d21] px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                  <span className="material-symbols-outlined text-[18px]">
-                    sort
-                  </span>
-                  <span>Last Updated</span>
-                </button>
+                 {/* Removed Last Updated Button */}
               </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Showing {projects.length} projects
+                Showing {filteredProjects.length} projects
               </p>
             </div>
 
@@ -183,15 +178,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 <div className="flex justify-center py-20">
                     <span className="material-symbols-outlined animate-spin text-4xl text-primary">progress_activity</span>
                 </div>
-            ) : projects.length === 0 ? (
+            ) : filteredProjects.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-slate-500">
                     <span className="material-symbols-outlined text-6xl mb-4">library_music</span>
-                    <p className="text-lg">No projects yet.</p>
-                    <button onClick={() => setShowCreateModal(true)} className="text-primary font-bold mt-2 hover:underline">Create one now</button>
+                    <p className="text-lg">{searchQuery ? 'No matching projects.' : 'No projects yet.'}</p>
+                    {!searchQuery && <button onClick={() => setShowCreateModal(true)} className="text-primary font-bold mt-2 hover:underline">Create one now</button>}
                 </div>
             ) : (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((project) => (
+              {filteredProjects.map((project) => (
                 <div
                   key={project.id}
                   className="group relative flex flex-col overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark transition-all hover:border-primary/50 hover:shadow-lg dark:hover:bg-card-hover-dark"

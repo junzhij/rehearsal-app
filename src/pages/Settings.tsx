@@ -70,6 +70,7 @@ export const Settings: React.FC<SettingsProps> = ({
     });
 
     setLyrics(updatedLyrics);
+    setSelectedLineIds(new Set()); // Auto-deselect after assignment
   };
 
   const clearAssignment = () => {
@@ -87,7 +88,7 @@ export const Settings: React.FC<SettingsProps> = ({
     try {
         await api.updateProjectLyrics(project.id, lyrics);
         onSave({ ...project, lyrics });
-        onBack();
+        // onBack(); // Handled by onSave logic in App.tsx
     } catch (e) {
         console.error(e);
         alert("Failed to save");
@@ -220,7 +221,6 @@ export const Settings: React.FC<SettingsProps> = ({
           </h2>
         </div>
         <div className="flex flex-1 justify-end gap-8">
-           {/* ... kept header same ... */}
         </div>
       </header>
 
