@@ -53,7 +53,7 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 npm run dev
 ```
 
-打开浏览器访问控制台输出的地址（通常是 http://localhost:5173）。
+打开浏览器访问控制台输出的地址（http://localhost:3000）。
 
 ## 📂 项目结构
 
