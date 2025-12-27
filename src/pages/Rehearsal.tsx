@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
+import * as Tone from "tone";
 import { Project, Part } from "../types";
+import { api } from "../services/api";
 
 interface RehearsalProps {
   project: Project;
@@ -10,30 +12,123 @@ interface RehearsalProps {
 export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSettings }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [pitch, setPitch] = useState(0);
-  const [currentSeconds, setCurrentSeconds] = useState(45); // Start at 0:45 for demo
+  const [currentSeconds, setCurrentSeconds] = useState(0);
   const [filterMode, setFilterMode] = useState<"ALL" | "MY_PART">("MY_PART");
   const [selectedRole, setSelectedRole] = useState<Part>(Part.Alto);
-  
-  // Simulation logic
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  const playerRef = useRef<Tone.Player | null>(null);
+  const pitchShiftRef = useRef<Tone.PitchShift | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const pausedAtRef = useRef<number>(0);
+
+  // Load Audio URL
   useEffect(() => {
-    let interval: any;
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setCurrentSeconds(s => s + 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
+      api.getAudioUrl(project.id).then(url => {
+          setAudioUrl(url);
+      });
+  }, [project.id]);
+
+  // Setup Tone.js
+  useEffect(() => {
+      if (!audioUrl) return;
+
+      const setupAudio = async () => {
+          setIsLoaded(false);
+          const player = new Tone.Player(audioUrl).toDestination();
+          // PitchShift
+          const pitchShift = new Tone.PitchShift(0).toDestination();
+          player.disconnect();
+          player.connect(pitchShift);
+          
+          await player.loaded;
+          
+          playerRef.current = player;
+          pitchShiftRef.current = pitchShift;
+          setIsLoaded(true);
+      };
+
+      setupAudio();
+
+      return () => {
+          playerRef.current?.dispose();
+          pitchShiftRef.current?.dispose();
+      };
+  }, [audioUrl]);
+
+  // Handle Pitch Change
+  useEffect(() => {
+      if (pitchShiftRef.current) {
+          pitchShiftRef.current.pitch = pitch;
+      }
+  }, [pitch]);
+
+  // Playback Logic
+  const togglePlay = async () => {
+      if (!isLoaded || !playerRef.current) return;
+
+      if (isPlaying) {
+          // Pause
+          playerRef.current.stop();
+          pausedAtRef.current = currentSeconds;
+          setIsPlaying(false);
+      } else {
+          // Play
+          await Tone.start();
+          playerRef.current.start(undefined, pausedAtRef.current);
+          startTimeRef.current = Tone.now() - pausedAtRef.current;
+          setIsPlaying(true);
+      }
+  };
+
+  // Time Sync Loop
+  useEffect(() => {
+      let animationFrame: number;
+
+      const updateTime = () => {
+          if (isPlaying && playerRef.current) {
+              // Calculate time based on Tone.now()
+              const now = Tone.now();
+              const elapsed = now - startTimeRef.current;
+              
+              if (elapsed >= (playerRef.current.buffer.duration || 0)) {
+                  setIsPlaying(false);
+                  pausedAtRef.current = 0;
+                  setCurrentSeconds(0);
+              } else {
+                  setCurrentSeconds(elapsed);
+                  animationFrame = requestAnimationFrame(updateTime);
+              }
+          }
+      };
+
+      if (isPlaying) {
+          animationFrame = requestAnimationFrame(updateTime);
+      }
+
+      return () => cancelAnimationFrame(animationFrame);
   }, [isPlaying]);
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const time = parseFloat(e.target.value);
+      setCurrentSeconds(time);
+      pausedAtRef.current = time;
+      startTimeRef.current = Tone.now() - time;
+      
+      if (isPlaying && playerRef.current) {
+          playerRef.current.stop();
+          playerRef.current.start(undefined, time);
+      }
+  };
 
   const formatTime = (totalSeconds: number) => {
     const min = Math.floor(totalSeconds / 60);
-    const sec = totalSeconds % 60;
+    const sec = Math.floor(totalSeconds % 60);
     return `${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   };
 
   // Determine current active line based on timestamp
-  // In a real app, this would be more complex range checking.
-  // Here we just find the line closest to current time without going over.
   const activeLineIndex = project.lyrics.reduce((closestIdx, line, idx) => {
     if (!line.seconds) return closestIdx;
     if (line.seconds <= currentSeconds && (closestIdx === -1 || line.seconds > (project.lyrics[closestIdx].seconds || 0))) {
@@ -41,23 +136,31 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
     }
     return closestIdx;
   }, -1);
+  
+  // Auto-scroll to active line
+  useEffect(() => {
+      if (activeLineIndex !== -1) {
+          const el = document.getElementById(`line-${activeLineIndex}`);
+          if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+      }
+  }, [activeLineIndex]);
 
   const getPartColor = (part: Part) => {
-     // Use colors from screenshots
      if (part === Part.Tenor) return "text-purple-500 bg-purple-500/20 bg-purple-500";
      if (part === Part.Soprano1) return "text-emerald-500 bg-emerald-500/20 bg-emerald-500";
-     if (part === Part.Alto) return "text-primary bg-primary/20 bg-primary"; // Alto is 'ME' in demo
+     if (part === Part.Alto) return "text-primary bg-primary/20 bg-primary"; 
      if (part === Part.Bass) return "text-orange-500 bg-orange-500/20 bg-orange-500";
      return "text-slate-500 bg-slate-500/20 bg-slate-400";
   };
   
   const getAvatar = (part: Part) => {
-    if (part === Part.Tenor) return "JD";
-    if (part === Part.Soprano1) return "AL";
-    if (part === Part.Alto) return "ME";
-    if (part === Part.Bass) return "BK";
-    return "ALL";
+      return part.substring(0, 2).toUpperCase();
   }
+
+  // Duration in seconds
+  const durationSec = playerRef.current?.buffer.duration || parseDuration(project.duration);
 
   return (
     <div className="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-white antialiased overflow-hidden h-screen flex flex-col">
@@ -116,21 +219,31 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                     {formatTime(currentSeconds)}
                   </p>
                   <p className="text-slate-500 dark:text-[#9dabb9] text-xs font-medium uppercase tracking-wide">
-                    Measure {Math.floor(currentSeconds / 2) + 1}
+                    Line {activeLineIndex + 1}
                   </p>
                   <p className="text-slate-500 dark:text-[#9dabb9] text-sm font-medium font-mono">
                     {project.duration}
                   </p>
                 </div>
                 <div className="group relative flex h-6 w-full items-center cursor-pointer">
+                  {/* Native Range Input for seeking */}
+                  <input 
+                    type="range" 
+                    min={0} 
+                    max={durationSec || 100} // Avoid 0 max
+                    value={currentSeconds} 
+                    onChange={handleSeek}
+                    className="absolute z-10 w-full opacity-0 cursor-pointer h-full"
+                  />
+                  
                   <div className="absolute h-1.5 w-full rounded-full bg-slate-200 dark:bg-[#3b4754]"></div>
                   <div
                     className="absolute h-1.5 rounded-full bg-primary"
-                    style={{ width: `${Math.min((currentSeconds / 252) * 100, 100)}%` }} // rough calc based on 4:12 duration
+                    style={{ width: `${Math.min((currentSeconds / (durationSec || 1)) * 100, 100)}%` }} 
                   ></div>
                   <div
-                    className="absolute h-4 w-4 rounded-full bg-white shadow-md border border-slate-200 dark:border-none transform -translate-x-1/2 scale-0 group-hover:scale-100 transition-transform duration-100"
-                     style={{ left: `${Math.min((currentSeconds / 252) * 100, 100)}%` }}
+                    className="absolute h-4 w-4 rounded-full bg-white shadow-md border border-slate-200 dark:border-none transform -translate-x-1/2 group-hover:scale-100 transition-transform duration-100"
+                     style={{ left: `${Math.min((currentSeconds / (durationSec || 1)) * 100, 100)}%` }}
                   ></div>
                 </div>
               </div>
@@ -144,11 +257,16 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                     </span>
                   </button>
                   <button 
-                    onClick={() => setIsPlaying(!isPlaying)}
-                    className="flex items-center justify-center h-12 w-12 rounded-full bg-primary text-white hover:bg-blue-600 transition-all shadow-lg shadow-blue-500/30">
-                    <span className="material-symbols-outlined text-[32px] fill-1">
-                      {isPlaying ? 'pause' : 'play_arrow'}
-                    </span>
+                    onClick={togglePlay}
+                    disabled={!isLoaded}
+                    className={`flex items-center justify-center h-12 w-12 rounded-full bg-primary text-white hover:bg-blue-600 transition-all shadow-lg shadow-blue-500/30 ${!isLoaded ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    {isLoaded ? (
+                        <span className="material-symbols-outlined text-[32px] fill-1">
+                        {isPlaying ? 'pause' : 'play_arrow'}
+                        </span>
+                    ) : (
+                        <span className="material-symbols-outlined animate-spin">progress_activity</span>
+                    )}
                   </button>
                   <button className="p-2 rounded-full text-slate-500 hover:text-primary hover:bg-primary/10 dark:text-[#9dabb9] dark:hover:text-primary transition-all">
                     <span className="material-symbols-outlined text-[28px]">
@@ -225,11 +343,6 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                  // Filtering logic
                  const isMyPart = filterMode === "MY_PART" ? line.parts.includes(selectedRole) || line.parts.includes(Part.Tutti) : true;
                  
-                 // If filtering is on and it's not my part, we can dim it or hide it.
-                 // The text description says "dim but don't hide".
-                 // However, "My Part" button usually implies hiding others or strong dimming. 
-                 // Let's stick to the visual style of the screenshot. The screenshot highlights specific parts.
-                 
                  const primaryPart = line.parts[0] || Part.Tutti;
                  const colorClasses = getPartColor(primaryPart).split(' '); // [text, bg-opacity, bg-bar]
                  const textColor = colorClasses[0];
@@ -250,7 +363,18 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
                     <div 
                         key={line.id}
                         id={`line-${idx}`}
-                        onClick={() => setCurrentSeconds(line.seconds || 0)} // Click to jump
+                        onClick={() => {
+                            // Seek to line timestamp
+                            if (line.seconds !== undefined) {
+                                setCurrentSeconds(line.seconds);
+                                pausedAtRef.current = line.seconds;
+                                startTimeRef.current = Tone.now() - line.seconds;
+                                if (isPlaying && playerRef.current) {
+                                    playerRef.current.stop();
+                                    playerRef.current.start(undefined, line.seconds);
+                                }
+                            }
+                        }}
                         className={`flex items-stretch gap-4 p-4 md:p-5 rounded-xl transition-all cursor-pointer ${containerClass}`}
                     >
                         <div className={`w-1.5 rounded-full self-stretch ${isActive ? 'bg-primary shadow-[0_0_10px_rgba(19,127,236,0.6)]' : barBg}`}></div>
@@ -286,4 +410,14 @@ export const Rehearsal: React.FC<RehearsalProps> = ({ project, onBack, onSetting
       </div>
     </div>
   );
+};
+
+// Helper need to be duplicated or imported
+const parseDuration = (timeStr: string): number => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':');
+  if (parts.length === 2) {
+      return (parseInt(parts[0]) * 60 + parseInt(parts[1])); // return seconds here
+  }
+  return 0;
 };

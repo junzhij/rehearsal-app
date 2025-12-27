@@ -1,14 +1,100 @@
-import React from "react";
-import { MOCK_PROJECTS } from "../constants";
+import React, { useEffect, useState } from "react";
 import { Project } from "../types";
+import { api } from "../services/api";
 
 interface DashboardProps {
   onNavigate: (screen: "SETTINGS" | "REHEARSAL", project: Project) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  const loadProjects = async () => {
+    try {
+      const data = await api.getProjects();
+      setProjects(data);
+    } catch (error) {
+      console.error("Failed to load projects", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateProject = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newProjectName.trim()) return;
+    
+    setCreating(true);
+    try {
+      const newProject = await api.createProject(newProjectName, "New Composition");
+      if (newProject) {
+        setNewProjectName("");
+        setShowCreateModal(false);
+        await loadProjects();
+        onNavigate("SETTINGS", newProject);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to create project");
+    } finally {
+        setCreating(false);
+    }
+  };
+
   return (
     <>
+      {/* Create Project Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-[#1a1d21] rounded-xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 dark:border-slate-700">
+            <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Create New Project</h3>
+              <button 
+                onClick={() => setShowCreateModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            <form onSubmit={handleCreateProject} className="p-6 flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Project Name</label>
+                <input 
+                  autoFocus
+                  type="text" 
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="e.g. Hallelujah Chorus"
+                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-black/20 px-4 py-2.5 text-slate-900 dark:text-white focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all"
+                />
+              </div>
+              <div className="flex justify-end gap-3 mt-2">
+                <button 
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  disabled={!newProjectName.trim() || creating}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-white bg-primary hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-lg shadow-blue-500/20 flex items-center gap-2">
+                  {creating && <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>}
+                  Create Project
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Top Navigation */}
       <header className="flex items-center justify-between border-b border-solid border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111418] px-4 py-3 md:px-10">
         <div className="flex items-center gap-8">
@@ -20,28 +106,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
               Rehearsal App
             </h2>
           </div>
+          {/* ... (Menu items kept same) ... */}
           <div className="hidden md:flex items-center gap-6">
-            <a
-              className="text-sm font-medium text-slate-900 dark:text-white hover:text-primary transition-colors"
-              href="#"
-            >
-              Dashboard
-            </a>
-            <a
-              className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
-              href="#"
-            >
-              Community
-            </a>
-            <a
-              className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
-              href="#"
-            >
-              Help
-            </a>
+            <a className="text-sm font-medium text-slate-900 dark:text-white hover:text-primary transition-colors" href="#">Dashboard</a>
+            <a className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors" href="#">Community</a>
           </div>
         </div>
-        <div className="flex flex-1 justify-end gap-4 md:gap-8">
+        {/* ... (Search and Profile kept same) ... */}
+         <div className="flex flex-1 justify-end gap-4 md:gap-8">
           <label className="hidden md:flex flex-col min-w-40 h-10 max-w-64">
             <div className="flex w-full flex-1 items-stretch rounded-lg bg-slate-100 dark:bg-[#283039] focus-within:ring-2 focus-within:ring-primary/50 transition-shadow">
               <div className="flex items-center justify-center pl-3 text-slate-400">
@@ -80,19 +152,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 </p>
               </div>
               <div className="flex gap-3">
-                <div className="flex rounded-lg bg-slate-100 dark:bg-[#283039] p-1">
-                  <button className="flex items-center justify-center rounded px-3 py-1.5 text-sm font-medium text-slate-900 dark:text-white shadow-sm bg-white dark:bg-slate-600">
-                    <span className="material-symbols-outlined text-[20px]">
-                      grid_view
-                    </span>
-                  </button>
-                  <button className="flex items-center justify-center rounded px-3 py-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">
-                    <span className="material-symbols-outlined text-[20px]">
-                      view_list
-                    </span>
-                  </button>
-                </div>
-                <button className="flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20">
+                <button 
+                  onClick={() => setShowCreateModal(true)}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-bold text-white hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20">
                   <span className="material-symbols-outlined text-[20px]">
                     add
                   </span>
@@ -104,27 +166,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
             {/* Toolbar / Filters */}
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex gap-2">
-                <button className="group flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1d21] px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+                 <button className="group flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1d21] px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
                   <span className="material-symbols-outlined text-[18px]">
                     sort
                   </span>
                   <span>Last Updated</span>
                 </button>
-                <button className="group flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1a1d21] px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                  <span className="material-symbols-outlined text-[18px]">
-                    filter_list
-                  </span>
-                  <span>Filter</span>
-                </button>
               </div>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Showing {MOCK_PROJECTS.length} projects
+                Showing {projects.length} projects
               </p>
             </div>
 
             {/* Projects Grid */}
+            {loading ? (
+                <div className="flex justify-center py-20">
+                    <span className="material-symbols-outlined animate-spin text-4xl text-primary">progress_activity</span>
+                </div>
+            ) : projects.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+                    <span className="material-symbols-outlined text-6xl mb-4">library_music</span>
+                    <p className="text-lg">No projects yet.</p>
+                    <button onClick={() => setShowCreateModal(true)} className="text-primary font-bold mt-2 hover:underline">Create one now</button>
+                </div>
+            ) : (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {MOCK_PROJECTS.map((project) => (
+              {projects.map((project) => (
                 <div
                   key={project.id}
                   className="group relative flex flex-col overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-card-dark transition-all hover:border-primary/50 hover:shadow-lg dark:hover:bg-card-hover-dark"
@@ -193,6 +260,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
                 </div>
               ))}
             </div>
+            )}
           </div>
         </div>
       </div>

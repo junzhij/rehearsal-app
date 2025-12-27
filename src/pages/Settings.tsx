@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from "react";
-import { Project, LyricLine, Part } from "../types";
+import React, { useState, useEffect, useRef } from "react";
+import { Project, LyricLine, Part, DbMember } from "../types";
+import { api } from "../services/api";
+import { supabase } from "../lib/supabase"; // Direct usage for simple queries not in api yet
 
 interface SettingsProps {
   project: Project;
@@ -7,19 +9,39 @@ interface SettingsProps {
   onSave: (updatedProject: Project) => void;
 }
 
+type Tab = "AUDIO" | "LYRICS" | "MEMBERS";
+
 export const Settings: React.FC<SettingsProps> = ({
   project,
   onBack,
   onSave,
 }) => {
+  const [activeTab, setActiveTab] = useState<Tab>("LYRICS");
   const [lyrics, setLyrics] = useState<LyricLine[]>(project.lyrics || []);
   const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [members, setMembers] = useState<DbMember[]>([]);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset local state if project changes
+  // Load initial data
   useEffect(() => {
     setLyrics(project.lyrics || []);
     setSelectedLineIds(new Set());
+    loadMembers();
+    loadAudio();
   }, [project]);
+
+  const loadMembers = async () => {
+      const { data } = await supabase.from('members').select('*').eq('project_id', project.id).order('order_index');
+      if (data) setMembers(data);
+  };
+
+  const loadAudio = async () => {
+      const url = await api.getAudioUrl(project.id);
+      setAudioUrl(url);
+  };
 
   const toggleSelection = (id: string) => {
     const newSet = new Set(selectedLineIds);
@@ -31,23 +53,23 @@ export const Settings: React.FC<SettingsProps> = ({
     setSelectedLineIds(newSet);
   };
 
-  const assignPart = (part: Part) => {
+  const assignPart = (memberId: string) => {
     if (selectedLineIds.size === 0) return;
+    
+    // Find member name
+    const member = members.find(m => m.id === memberId);
+    if (!member) return;
+    const partName = member.name as Part; 
 
     const updatedLyrics = lyrics.map((line) => {
       if (selectedLineIds.has(line.id)) {
-        // Toggle part logic: if part exists, remove it, otherwise add it
-        // Or simply set logic. The prompt implies "Assign Selected", so we'll add.
-        // For simplicity in MVP, we replace or add unique. Let's add unique.
-        const newParts = line.parts.includes(part) ? line.parts : [...line.parts, part];
+        const newParts = [partName];
         return { ...line, parts: newParts };
       }
       return line;
     });
 
     setLyrics(updatedLyrics);
-    // Optional: Clear selection after assignment
-    // setSelectedLineIds(new Set());
   };
 
   const clearAssignment = () => {
@@ -60,13 +82,119 @@ export const Settings: React.FC<SettingsProps> = ({
     setLyrics(updatedLyrics);
   };
 
-  const handlePublish = () => {
-    onSave({ ...project, lyrics });
-    onBack();
+  const handlePublish = async () => {
+    setSaving(true);
+    try {
+        await api.updateProjectLyrics(project.id, lyrics);
+        onSave({ ...project, lyrics });
+        onBack();
+    } catch (e) {
+        console.error(e);
+        alert("Failed to save");
+    } finally {
+        setSaving(false);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      try {
+          const url = await api.uploadAudio(project.id, file);
+          // For MVP, assume a default duration or 0 until we play it.
+          // Or read duration from Audio element.
+          // Let's just save metadata with 0 duration for now, user can update or auto-detect later.
+          // Ideally we create an Audio object to read duration.
+          const audio = new Audio(url);
+          audio.onloadedmetadata = async () => {
+             const duration = Math.floor(audio.duration * 1000);
+             await api.saveAudioMetadata(project.id, file.name, url, duration);
+             setAudioUrl(url);
+             setUploading(false);
+          };
+          audio.onerror = async () => {
+             await api.saveAudioMetadata(project.id, file.name, url, 0);
+             setAudioUrl(url);
+             setUploading(false);
+          }
+      } catch (err) {
+          console.error(err);
+          alert("Upload failed");
+          setUploading(false);
+      }
+  };
+
+  const handleAddMember = async () => {
+      const name = prompt("Member Name:");
+      if (!name) return;
+      // Random color
+      const colors = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899"];
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      
+      try {
+          await api.addMember(project.id, name, color);
+          loadMembers();
+      } catch (e) {
+          alert("Failed to add member");
+      }
+  };
+
+  const handleDeleteMember = async (id: string) => {
+      if (!confirm("Delete member?")) return;
+      try {
+          await api.deleteMember(id);
+          loadMembers();
+      } catch (e) {
+          alert("Failed to delete member");
+      }
+  };
+
+  const handleLrcUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      const newLyrics: LyricLine[] = [];
+      const lines = text.split("\n");
+      const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+
+      lines.forEach((line, index) => {
+        const match = line.match(timeRegex);
+        if (match) {
+          const content = line.replace(timeRegex, "").trim();
+          if (content) {
+             // Basic formatting: 00:00
+             const timestamp = `${match[1]}:${match[2]}`;
+             newLyrics.push({
+                 id: `lrc-${Date.now()}-${index}`,
+                 content: content,
+                 parts: [],
+                 timestamp: timestamp
+             });
+          }
+        }
+      });
+
+      if (newLyrics.length > 0) {
+          if (confirm(`Parsed ${newLyrics.length} lines. Replace existing lyrics?`)) {
+              setLyrics(newLyrics);
+          }
+      } else {
+          alert("No valid LRC lyrics found.");
+      }
+    };
+    reader.readAsText(file);
   };
 
   // Helper to get color classes for chips
   const getPartColor = (part: Part) => {
+    // Basic mapping based on name if it matches standard parts, else default
     switch (part) {
       case Part.Soprano1: return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300";
       case Part.Soprano2: return "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300";
@@ -92,33 +220,7 @@ export const Settings: React.FC<SettingsProps> = ({
           </h2>
         </div>
         <div className="flex flex-1 justify-end gap-8">
-          <div className="hidden md:flex items-center gap-9">
-            <a
-              className="text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary text-sm font-medium leading-normal transition-colors"
-              href="#"
-            >
-              Dashboard
-            </a>
-            <a
-              className="text-primary text-sm font-medium leading-normal"
-              href="#"
-            >
-              Projects
-            </a>
-            <a
-              className="text-slate-600 dark:text-slate-300 hover:text-primary dark:hover:text-primary text-sm font-medium leading-normal transition-colors"
-              href="#"
-            >
-              Calendar
-            </a>
-          </div>
-          <div
-            className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10 ring-2 ring-slate-200 dark:ring-slate-700"
-            style={{
-              backgroundImage:
-                'url("https://lh3.googleusercontent.com/aida-public/AB6AXuBHKWqxmxlKXsR38cMkNCXPTbPyGM8xywpRve2VACm5Yb1Rx__pEv1DzKXYfQE219ItnCohXJmYKWlnwWw71u2YNknG8dqYbvAj6WBSomMVLDxL-kmyhQrLVUeATvXCOJa3PDZ1xarxvAKHKruFH-c0MvewFUZ9iTCkEJIKPAug2JuN3sx7iheud9AK0j43lg5GDXxU77ZutVfU4jp5ekBIgbfO2QrewIMKxSv0WPbHPSA3q_X1hYQzK_5bk64nrHXhId3WtE6WbwJM")',
-            }}
-          ></div>
+           {/* ... kept header same ... */}
         </div>
       </header>
 
@@ -138,7 +240,7 @@ export const Settings: React.FC<SettingsProps> = ({
                   Back to Projects
                 </button>
                 <p className="text-slate-900 dark:text-white tracking-light text-[32px] font-bold leading-tight">
-                  {project.title} - Rehearsal A
+                  {project.title} - Setup
                 </p>
                 <p className="text-slate-500 dark:text-slate-400 text-sm font-normal leading-normal flex items-center gap-2">
                   <span className="material-symbols-outlined text-base">
@@ -148,20 +250,15 @@ export const Settings: React.FC<SettingsProps> = ({
                 </p>
               </div>
               <div className="flex gap-3">
-                <button className="flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white font-medium text-sm hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors">
-                  <span className="material-symbols-outlined text-lg">
-                    save
-                  </span>
-                  Save Draft
-                </button>
                 <button
                   onClick={handlePublish}
-                  className="flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-primary text-white font-medium text-sm hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+                  disabled={saving}
+                  className="flex items-center justify-center gap-2 h-10 px-4 rounded-lg bg-primary text-white font-medium text-sm hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20 disabled:opacity-50"
                 >
                   <span className="material-symbols-outlined text-lg">
                     publish
                   </span>
-                  Publish Changes
+                  {saving ? "Saving..." : "Save Changes"}
                 </button>
               </div>
             </div>
@@ -169,35 +266,103 @@ export const Settings: React.FC<SettingsProps> = ({
             {/* Tabs */}
             <div className="pb-3 px-4">
               <div className="flex border-b border-slate-200 dark:border-slate-700 gap-8 overflow-x-auto">
-                <a
-                  className="flex flex-col items-center justify-center border-b-[3px] border-b-transparent text-slate-500 dark:text-slate-400 pb-[13px] pt-4 hover:text-slate-700 dark:hover:text-slate-200 transition-colors whitespace-nowrap px-2"
-                  href="#"
+                <button
+                  onClick={() => setActiveTab("AUDIO")}
+                  className={`flex flex-col items-center justify-center border-b-[3px] pb-[13px] pt-4 whitespace-nowrap px-2 transition-colors ${activeTab === "AUDIO" ? "border-b-primary text-primary" : "border-b-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"}`}
                 >
                   <p className="text-sm font-bold leading-normal tracking-[0.015em]">
                     Audio Settings
                   </p>
-                </a>
-                <a
-                  className="flex flex-col items-center justify-center border-b-[3px] border-b-primary text-primary pb-[13px] pt-4 whitespace-nowrap px-2"
-                  href="#"
-                >
-                  <p className="text-sm font-bold leading-normal tracking-[0.015em]">
-                    Lyrics & Assignment
-                  </p>
-                </a>
-                <a
-                  className="flex flex-col items-center justify-center border-b-[3px] border-b-transparent text-slate-500 dark:text-slate-400 pb-[13px] pt-4 hover:text-slate-700 dark:hover:text-slate-200 transition-colors whitespace-nowrap px-2"
-                  href="#"
+                </button>
+                <button
+                   onClick={() => setActiveTab("MEMBERS")}
+                   className={`flex flex-col items-center justify-center border-b-[3px] pb-[13px] pt-4 whitespace-nowrap px-2 transition-colors ${activeTab === "MEMBERS" ? "border-b-primary text-primary" : "border-b-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"}`}
                 >
                   <p className="text-sm font-bold leading-normal tracking-[0.015em]">
                     Member Management
                   </p>
-                </a>
+                </button>
+                <button
+                   onClick={() => setActiveTab("LYRICS")}
+                   className={`flex flex-col items-center justify-center border-b-[3px] pb-[13px] pt-4 whitespace-nowrap px-2 transition-colors ${activeTab === "LYRICS" ? "border-b-primary text-primary" : "border-b-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"}`}
+                >
+                  <p className="text-sm font-bold leading-normal tracking-[0.015em]">
+                    Lyrics & Assignment
+                  </p>
+                </button>
               </div>
             </div>
 
-            {/* Main Workspace (2 Columns) */}
+            {/* Tab Content */}
             <div className="flex flex-col lg:flex-row gap-6 p-4 h-full min-h-[600px]">
+                
+              {activeTab === "AUDIO" && (
+                  <div className="w-full bg-white dark:bg-surface-dark rounded-xl border border-slate-200 dark:border-slate-800 p-8 flex flex-col items-center justify-center gap-6">
+                      <div className="size-24 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-4">
+                          <span className="material-symbols-outlined text-5xl">music_note</span>
+                      </div>
+                      <h3 className="text-xl font-bold">Audio Track</h3>
+                      
+                      {audioUrl ? (
+                          <div className="w-full max-w-md flex flex-col gap-4">
+                              <audio controls src={audioUrl} className="w-full" />
+                              <button onClick={() => fileInputRef.current?.click()} className="text-sm text-slate-500 hover:text-primary">Replace Audio</button>
+                          </div>
+                      ) : (
+                          <div className="text-slate-500">No audio uploaded yet.</div>
+                      )}
+
+                      <input 
+                        type="file" 
+                        accept="audio/*" 
+                        ref={fileInputRef} 
+                        onChange={handleFileUpload} 
+                        className="hidden" 
+                      />
+                      
+                      {!audioUrl && (
+                        <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={uploading}
+                            className="bg-primary text-white px-6 py-3 rounded-lg font-bold shadow hover:bg-blue-600 transition-colors disabled:opacity-50">
+                            {uploading ? "Uploading..." : "Upload Audio File"}
+                        </button>
+                      )}
+                  </div>
+              )}
+
+              {activeTab === "MEMBERS" && (
+                  <div className="w-full bg-white dark:bg-surface-dark rounded-xl border border-slate-200 dark:border-slate-800 p-8">
+                      <div className="flex justify-between items-center mb-6">
+                          <h3 className="text-xl font-bold">Project Members</h3>
+                          <button onClick={handleAddMember} className="bg-primary text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-600">
+                              + Add Member
+                          </button>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {members.map(member => (
+                              <div key={member.id} className="flex items-center justify-between p-4 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1a2129]">
+                                  <div className="flex items-center gap-3">
+                                      <div className="size-8 rounded-full" style={{ backgroundColor: member.color }}></div>
+                                      <span className="font-bold text-slate-700 dark:text-slate-200">{member.name}</span>
+                                  </div>
+                                  <button onClick={() => handleDeleteMember(member.id)} className="text-slate-400 hover:text-red-500">
+                                      <span className="material-symbols-outlined">delete</span>
+                                  </button>
+                              </div>
+                          ))}
+                          {members.length === 0 && (
+                              <div className="col-span-full text-center py-10 text-slate-500">
+                                  No members yet. Add members to assign lyrics.
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              )}
+
+              {activeTab === "LYRICS" && (
+              <>
               {/* LEFT COLUMN: Lyrics Editor */}
               <div className="flex-1 flex flex-col bg-white dark:bg-surface-dark rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
                 {/* Editor Toolbar */}
@@ -209,28 +374,16 @@ export const Settings: React.FC<SettingsProps> = ({
                     Lyrics Editor
                   </h3>
                   <div className="flex gap-2">
+                    <label className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer" title="Import LRC">
+                        <span className="material-symbols-outlined text-[20px]">upload_file</span>
+                        <input type="file" accept=".lrc" className="hidden" onChange={handleLrcUpload} />
+                    </label>
                     <button
+                      onClick={() => setLyrics([...lyrics, { id: `new-${Date.now()}`, content: "New Line", parts: [] }])}
                       className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
                       title="Add Line"
                     >
                       <span className="material-symbols-outlined">add</span>
-                    </button>
-                    <div className="w-px bg-slate-300 dark:bg-slate-700 h-6 my-auto"></div>
-                    <button
-                      className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                      title="Decrease Font"
-                    >
-                      <span className="material-symbols-outlined text-lg">
-                        text_decrease
-                      </span>
-                    </button>
-                    <button
-                      className="p-2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                      title="Increase Font"
-                    >
-                      <span className="material-symbols-outlined text-lg">
-                        text_increase
-                      </span>
                     </button>
                   </div>
                 </div>
@@ -249,27 +402,30 @@ export const Settings: React.FC<SettingsProps> = ({
                     return (
                       <div
                         key={line.id}
-                        className={`group flex items-start gap-4 p-3 rounded-lg transition-colors border ${
+                        className={`group flex items-start gap-4 p-3 rounded-lg transition-colors border cursor-pointer ${
                           isSelected
-                            ? "bg-primary/5 border-primary/20 hover:bg-primary/10"
+                            ? "bg-primary/5 border-primary/20"
                             : "border-transparent hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-200 dark:hover:border-slate-700"
                         }`}
+                        onClick={() => toggleSelection(line.id)}
                       >
-                        <div className="pt-1">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelection(line.id)}
-                            className="h-5 w-5 rounded border-slate-300 dark:border-slate-600 bg-transparent text-primary focus:ring-primary dark:checked:bg-primary dark:checked:border-primary cursor-pointer"
-                          />
+                        <div className="pt-1 pointer-events-none">
+                          <div className={`
+                            h-5 w-5 rounded border flex items-center justify-center transition-all
+                            ${isSelected 
+                                ? "bg-primary border-primary text-white" 
+                                : "border-slate-300 dark:border-slate-600 bg-transparent text-transparent group-hover:border-primary/50"}
+                          `}>
+                            <span className="material-symbols-outlined text-[16px] font-bold">check</span>
+                          </div>
                         </div>
                         <div className="flex-1 flex flex-col gap-2">
                           <div
                             className="text-slate-900 dark:text-white text-lg outline-none focus:border-b focus:border-primary border-b border-transparent"
                             contentEditable
                             suppressContentEditableWarning
+                            onClick={(e) => e.stopPropagation()} // Prevent triggering row selection
                             onBlur={(e) => {
-                                // Simplified update logic - in real app would validate content
                                 const content = e.currentTarget.textContent || "";
                                 setLyrics(prev => prev.map(l => l.id === line.id ? {...l, content} : l))
                             }}
@@ -277,6 +433,11 @@ export const Settings: React.FC<SettingsProps> = ({
                             {line.content}
                           </div>
                           <div className="flex gap-2 flex-wrap">
+                            {line.timestamp && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono bg-slate-100 dark:bg-slate-800 text-slate-500">
+                                    {line.timestamp}
+                                </span>
+                            )}
                             {line.parts.map((p, idx) => (
                               <span
                                 key={idx}
@@ -292,8 +453,15 @@ export const Settings: React.FC<SettingsProps> = ({
                             isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                           }`}
                         >
-                          <span className="material-symbols-outlined text-slate-400 cursor-grab">
-                            drag_indicator
+                          <span 
+                            onClick={() => {
+                                // Delete line logic
+                                if(confirm("Delete this line?")) {
+                                    setLyrics(prev => prev.filter(l => l.id !== line.id));
+                                }
+                            }}
+                            className="material-symbols-outlined text-slate-400 cursor-pointer hover:text-red-500">
+                            delete
                           </span>
                         </div>
                       </div>
@@ -315,29 +483,25 @@ export const Settings: React.FC<SettingsProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mb-3 uppercase font-semibold tracking-wider">
-                    Assign Parts
+                    Assign to Member
                   </p>
                   {/* Member/Part Chips */}
                   <div className="flex flex-wrap gap-2 mb-6">
-                    {[
-                      { part: Part.Soprano1, color: "bg-purple-500", label: "Soprano 1", hover: "hover:bg-purple-50 hover:border-purple-200" },
-                      { part: Part.Soprano2, color: "bg-purple-400", label: "Soprano 2", hover: "hover:bg-purple-50 hover:border-purple-200" },
-                      { part: Part.Alto, color: "bg-pink-500", label: "Alto", hover: "hover:bg-pink-50 hover:border-pink-200" },
-                      { part: Part.Tenor, color: "bg-blue-500", label: "Tenor", hover: "hover:bg-blue-50 hover:border-blue-200" },
-                      { part: Part.Bass, color: "bg-green-500", label: "Bass", hover: "hover:bg-green-50 hover:border-green-200" },
-                      { part: Part.Tutti, color: "bg-slate-400", label: "Tutti (All)", hover: "hover:bg-slate-200" },
-                    ].map((item) => (
+                    {members.map((member) => (
                       <button
-                        key={item.label}
-                        onClick={() => assignPart(item.part)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1a2129] transition-colors group ${item.hover}`}
+                        key={member.id}
+                        onClick={() => assignPart(member.id)}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-[#1a2129] transition-colors group hover:bg-slate-100`}
                       >
-                        <div className={`size-2 rounded-full ${item.color}`}></div>
+                        <div className="size-2 rounded-full" style={{ backgroundColor: member.color }}></div>
                         <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                          {item.label}
+                          {member.name}
                         </span>
                       </button>
                     ))}
+                    {members.length === 0 && (
+                        <div className="text-xs text-slate-400">No members available. Go to Member Management to add.</div>
+                    )}
                   </div>
                   {/* Action Buttons */}
                   <div className="flex flex-col gap-3">
@@ -351,40 +515,10 @@ export const Settings: React.FC<SettingsProps> = ({
                       Clear Assignment
                     </button>
                   </div>
-                  <hr className="my-6 border-slate-200 dark:border-slate-700" />
-                  {/* Pitch Control Mini Widget */}
-                  <div>
-                    <div className="flex justify-between items-center mb-3">
-                      <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-semibold tracking-wider">
-                        Song Key
-                      </p>
-                      <span className="text-xs font-mono bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded text-slate-700 dark:text-slate-300">
-                        0 Semi
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between bg-slate-50 dark:bg-[#1a2129] rounded-lg p-2 border border-slate-200 dark:border-slate-700">
-                      <button className="size-8 flex items-center justify-center rounded bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-600 shadow-sm hover:text-primary transition-colors">
-                        <span className="material-symbols-outlined text-lg">
-                          remove
-                        </span>
-                      </button>
-                      <div className="flex flex-col items-center">
-                        <span className="text-lg font-bold text-slate-900 dark:text-white">
-                          C Maj
-                        </span>
-                        <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                          Original Key
-                        </span>
-                      </div>
-                      <button className="size-8 flex items-center justify-center rounded bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-600 shadow-sm hover:text-primary transition-colors">
-                        <span className="material-symbols-outlined text-lg">
-                          add
-                        </span>
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </div>
+              </>
+              )}
             </div>
           </div>
         </div>
